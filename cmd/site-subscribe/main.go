@@ -69,11 +69,4 @@ func main() {
 		displayUsage()
 		return
 	}
-
-	//key, err := ioutil.ReadFile("sendgrid-key")
-	//if err != nil {
-	//	log.Fatalf("Unable to read key file: %v", err)
-	//}
-	//trimmedKey := strings.TrimSpace(string(key))
-
 }
