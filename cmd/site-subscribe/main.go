@@ -8,11 +8,6 @@ import (
 	ss "github.com/narrative/site-subscribe"
 )
 
-/*
-usage:
-site-subscribe sub <site> --url=<url> --selector=<selector> --user=<email address>
-site-subscribe update --key=<sendgrid-key>
-*/
 func main() {
 
 	subCommand := flag.NewFlagSet("sub", flag.ExitOnError)
