@@ -42,7 +42,7 @@ type ContentHash struct {
 // New sets up and returns a siteSubscribe object.
 func connectToDB() *gorm.DB {
 
-	db, err := gorm.Open("sqlite3", "data.db")
+	db, err := gorm.Open("sqlite3", "site-subscribe.db")
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)
 	}
