@@ -39,110 +39,98 @@ type ContentHash struct {
 	Hash   string `gorm:"not null"`
 }
 
-// New sets up and returns a siteSubscribe object.
-func connectToDB() *gorm.DB {
-
+func withDB(f func(*gorm.DB)) {
 	db, err := gorm.Open("sqlite3", "site-subscribe.db")
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)
 	}
-
-	// Migrate the schema
+	defer db.Close()
 	db.AutoMigrate(&User{}, &Site{}, &ContentHash{})
-
-	return db
-}
-
-// Close cleans up and should be called when the SiteSubscribe object is no longer required.
-func closeDB(db *gorm.DB) {
-	db.Close()
+	f(db)
 }
 
 // AddUser creates a new user.
 func AddUser(userName, userEmail string) {
-	db := connectToDB()
-	defer db.Close()
-
-	db.Create(&User{Name: userName, Email: userEmail})
+	withDB(func(db *gorm.DB) {
+		db.Create(&User{Name: userName, Email: userEmail})
+	})
 }
 
 // AddSite subscribes a user to a site.
 func AddSite(userEmail string, site Site) {
-	db := connectToDB()
-	defer db.Close()
+	withDB(func(db *gorm.DB) {
+		var user User
+		db.Where(&User{Email: userEmail}).First(&user)
 
-	var user User
-	db.Where(&User{Email: userEmail}).First(&user)
-
-	user.Sites = append(user.Sites, site)
-	db.Save(user)
+		user.Sites = append(user.Sites, site)
+		db.Save(user)
+	})
 }
 
 // Update checks all sites for changes, and sends out notifications as necessary.
 func Update(sendgridKey string) {
+	withDB(func(db *gorm.DB) {
 
-	db := connectToDB()
-	defer db.Close()
+		var users []User
+		db.Find(&users)
 
-	sendgridClient := sendgrid.NewSendClient(sendgridKey)
+		for _, user := range users {
 
-	var users []User
-	db.Find(&users)
+			var userSites []Site
+			db.Model(user).Related(&userSites)
 
-	for _, user := range users {
+			var updatedSites []Site
 
-		var userSites []Site
-		db.Model(user).Related(&userSites)
+			for _, site := range userSites {
 
-		var updatedSites []Site
-
-		for _, site := range userSites {
-
-			doc, err := goquery.NewDocument(site.URL)
-			if err != nil {
-				log.Printf("could not get page %s: %v", site.URL, err)
-				continue
-			}
-
-			content, err := doc.Find(func(s string) string {
-				if s == "" {
-					return "body"
+				doc, err := goquery.NewDocument(site.URL)
+				if err != nil {
+					log.Printf("could not get page %s: %v", site.URL, err)
+					continue
 				}
-				return s
-			}(site.ContentSelector)).Html()
-			if err != nil {
-				log.Printf("could get retrieve content from %s: %v", site.URL, err)
+
+				content, err := doc.Find(func(s string) string {
+					if s == "" {
+						return "body"
+					}
+					return s
+				}(site.ContentSelector)).Html()
+				if err != nil {
+					log.Printf("could get retrieve content from %s: %v", site.URL, err)
+				}
+
+				log.Printf("Downloaded content from: %s", site.URL)
+
+				hashArray := md5.Sum([]byte(content))
+				newHash := ContentHash{
+					Hash: fmt.Sprintf("%x", hashArray),
+				}
+
+				log.Printf("Hashed content: %v", newHash)
+
+				var lastHash ContentHash
+				db.Where(&ContentHash{SiteID: site.ID}).Last(&lastHash)
+
+				if lastHash.Hash != "" && lastHash.Hash != newHash.Hash {
+					updatedSites = append(updatedSites, site)
+				}
+
+				site.ContentHashes = append(site.ContentHashes, newHash)
+				db.Save(site)
+
 			}
 
-			log.Printf("Downloaded content from: %s", site.URL)
-
-			hashArray := md5.Sum([]byte(content))
-			newHash := ContentHash{
-				Hash: fmt.Sprintf("%x", hashArray),
+			if len(updatedSites) > 0 {
+				log.Printf("Changes detected on %d sites, notifying user %s", len(updatedSites), user.Name)
+				notify(sendgridKey, user, updatedSites)
 			}
-
-			log.Printf("Hashed content: %v", newHash)
-
-			var lastHash ContentHash
-			db.Where(&ContentHash{SiteID: site.ID}).Last(&lastHash)
-
-			if lastHash.Hash != "" && lastHash.Hash != newHash.Hash {
-				updatedSites = append(updatedSites, site)
-			}
-
-			site.ContentHashes = append(site.ContentHashes, newHash)
-			db.Save(site)
-
 		}
-
-		if len(updatedSites) > 0 {
-			log.Printf("Changes detected on %d sites, notifying user %s", len(updatedSites), user.Name)
-			notify(sendgridClient, user, updatedSites)
-		}
-	}
+	})
 }
 
-func notify(sendgridClient *sendgrid.Client, user User, sites []Site) {
+func notify(sendgridKey string, user User, sites []Site) {
+	sendgridClient := sendgrid.NewSendClient(sendgridKey)
+
 	from := mail.NewEmail("Site Subscribe", "eriknstevenson@gmail.com")
 	if len(sites) == 0 {
 		return
